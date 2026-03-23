@@ -1,1 +1,806 @@
-
+//=============================================================================
+// DimensionsCollide_Accessibility.js
+//=============================================================================
+// Dimensions Collide: The Inter-Universal Impact
+// Blind Accessibility Plugin for RPG Maker MV
+// Based on the series by GalaxiaStar1128
+//
+// Compatible with: NVDA, Windows Narrator, JAWS (via Web Speech API fallback)
+// Requires: RPG Maker MV 1.6.2+
+// License: MIT
+//=============================================================================
+ 
+/*:
+ * @plugindesc v1.0.0 - Full blind accessibility system for Dimensions Collide.
+ * Includes voice selector, auto-narration, audio cues, and NVDA support.
+ * @author YourName (based on series by GalaxiaStar1128)
+ *
+ * @param ---General---
+ *
+ * @param speechEnabled
+ * @parent ---General---
+ * @type boolean
+ * @on Enabled
+ * @off Disabled
+ * @desc Enable text-to-speech narration by default.
+ * @default true
+ *
+ * @param defaultRate
+ * @parent ---General---
+ * @type number
+ * @decimals 1
+ * @min 0.5
+ * @max 2.0
+ * @desc Default speech rate. 1.0 is normal speed.
+ * @default 1.0
+ *
+ * @param defaultVolume
+ * @parent ---General---
+ * @type number
+ * @decimals 1
+ * @min 0.1
+ * @max 1.0
+ * @desc Default speech volume. 1.0 is full volume.
+ * @default 1.0
+ *
+ * @param defaultPitch
+ * @parent ---General---
+ * @type number
+ * @decimals 1
+ * @min 0.5
+ * @max 2.0
+ * @desc Default speech pitch. 1.0 is normal.
+ * @default 1.0
+ *
+ * @param ---NVDA---
+ *
+ * @param nvdaMode
+ * @parent ---NVDA---
+ * @type boolean
+ * @on Enabled
+ * @off Disabled
+ * @desc Enable NVDA compatibility mode. Adds ARIA live regions
+ * and extra announcement delays for NVDA users.
+ * @default true
+ *
+ * @param nvdaDelay
+ * @parent ---NVDA---
+ * @type number
+ * @min 0
+ * @max 2000
+ * @desc Delay in milliseconds before speaking text in NVDA mode.
+ * Gives NVDA time to read its own announcements first.
+ * @default 300
+ *
+ * @param ---Audio Cues---
+ *
+ * @param menuCue
+ * @parent ---Audio Cues---
+ * @type file
+ * @dir audio/se/
+ * @desc Sound effect for menu cursor movement.
+ * @default Cursor1
+ *
+ * @param confirmCue
+ * @parent ---Audio Cues---
+ * @type file
+ * @dir audio/se/
+ * @desc Sound effect for menu confirmation.
+ * @default Decision1
+ *
+ * @param cancelCue
+ * @parent ---Audio Cues---
+ * @type file
+ * @dir audio/se/
+ * @desc Sound effect for menu cancel.
+ * @default Cancel1
+ *
+ * @param battleHitCue
+ * @parent ---Audio Cues---
+ * @type file
+ * @dir audio/se/
+ * @desc Sound effect for a battle hit landing.
+ * @default Hit1
+ *
+ * @param battleVictoryCue
+ * @parent ---Audio Cues---
+ * @type file
+ * @dir audio/se/
+ * @desc Sound effect when a battle is won.
+ * @default Victory1
+ *
+ * @param lowHpCue
+ * @parent ---Audio Cue---
+ * @type file
+ * @dir audio/se/
+ * @desc Sound effect when a party member's HP is critically low.
+ * @default Buzzer1
+ *
+ * @help
+ * ============================================================================
+ * DIMENSIONS COLLIDE — BLIND ACCESSIBILITY PLUGIN
+ * ============================================================================
+ * This plugin provides full blind accessibility for RPG Maker MV, designed
+ * specifically for Dimensions Collide: The Inter-Universal Impact.
+ *
+ * FEATURES:
+ * - Auto-narration of all message windows via Web Speech API
+ * - In-game voice selector (lists all voices installed on the player's OS)
+ * - Adjustable speech rate, pitch, and volume
+ * - NVDA compatibility mode with ARIA live region injection
+ * - Audio cues for all menu navigation, battle events, and map transitions
+ * - "Look Around" system — describe the current map via plugin command
+ * - Repeat Last Line feature (press the configured key)
+ * - Battle announcer — narrates every action automatically
+ * - Low HP audio warning
+ * - All settings saved to localStorage and persist between sessions
+ *
+ * ============================================================================
+ * PLUGIN COMMANDS
+ * ============================================================================
+ * Use these in RPG Maker MV's event editor under "Plugin Command":
+ *
+ *   DC_SPEAK Hello, hero! Welcome to the Mushroom Kingdom dimension.
+ *     -> Speaks any text you write using the selected voice.
+ *
+ *   DC_LOOKAROUND
+ *     -> Speaks the map description set via DC_SETMAPDESC.
+ *
+ *   DC_SETMAPDESC You are in a crumbling dimensional rift. Nexus Emperion's
+ *   energy fills the air. A portal glows to the north.
+ *     -> Sets the description for the current map's Look Around narration.
+ *
+ *   DC_SILENCE
+ *     -> Immediately stops any current speech.
+ *
+ *   DC_REPEATLINE
+ *     -> Repeats the last spoken line.
+ *
+ *   DC_BATTLEANNOUNCE Goku fires a Kamehameha at Nexus Emperion for 450 damage!
+ *     -> Speaks a battle announcement in the battle announcer voice style.
+ *
+ *   DC_SPEECH_ON
+ *     -> Enables speech narration.
+ *
+ *   DC_SPEECH_OFF
+ *     -> Disables speech narration.
+ *
+ * ============================================================================
+ * OPTIONS MENU INTEGRATION
+ * ============================================================================
+ * The plugin automatically adds these options to your Options menu:
+ *   - Accessibility Speech  (On / Off)
+ *   - Voice Select          (lists installed OS voices)
+ *   - Speech Rate           (0.5x to 2.0x)
+ *   - Speech Pitch          (0.5 to 2.0)
+ *   - Speech Volume         (10% to 100%)
+ *   - NVDA Mode             (On / Off)
+ *   - Repeat Last Line      (button)
+ *
+ * ============================================================================
+ * NVDA COMPATIBILITY NOTES
+ * ============================================================================
+ * This plugin injects a hidden ARIA live region into the NW.js window DOM.
+ * When NVDA mode is enabled, every spoken line is ALSO written to this live
+ * region, which NVDA picks up and reads in the user's configured NVDA voice.
+ * This means blind players using NVDA will hear narration in their preferred
+ * NVDA voice, while sighted players or non-NVDA users hear the Web Speech
+ * API voice selected in the options menu. Both systems run in parallel.
+ *
+ * ============================================================================
+ * CREDITS
+ * ============================================================================
+ * Game concept and series: GalaxiaStar1128 (YouTube)
+ * Plugin: [Your Name]
+ * Accessibility research: Game Accessibility Guidelines (gameaccessibilityguidelines.com)
+ * ============================================================================
+ */
+ 
+(function () {
+    'use strict';
+ 
+    //=========================================================================
+    // CONSTANTS & PARAMETERS
+    //=========================================================================
+ 
+    const PLUGIN_NAME = 'DimensionsCollide_Accessibility';
+    const STORAGE_KEY = 'DC_Accessibility_Settings';
+ 
+    const params = PluginManager.parameters(PLUGIN_NAME);
+ 
+    const DEFAULT_SETTINGS = {
+        speechEnabled:  String(params['speechEnabled'])  !== 'false',
+        nvdaMode:       String(params['nvdaMode'])        !== 'false',
+        nvdaDelay:      Number(params['nvdaDelay'])       || 300,
+        rate:           Number(params['defaultRate'])     || 1.0,
+        pitch:          Number(params['defaultPitch'])    || 1.0,
+        volume:         Number(params['defaultVolume'])   || 1.0,
+        voiceIndex:     0,
+        menuCue:        String(params['menuCue'])         || 'Cursor1',
+        confirmCue:     String(params['confirmCue'])      || 'Decision1',
+        cancelCue:      String(params['cancelCue'])       || 'Cancel1',
+        battleHitCue:   String(params['battleHitCue'])    || 'Hit1',
+        victoryCue:     String(params['battleVictoryCue'])|| 'Victory1',
+        lowHpCue:       String(params['lowHpCue'])        || 'Buzzer1',
+    };
+ 
+    //=========================================================================
+    // SETTINGS MANAGER
+    //=========================================================================
+ 
+    const DC_Settings = {
+        _data: Object.assign({}, DEFAULT_SETTINGS),
+ 
+        load: function () {
+            try {
+                const saved = localStorage.getItem(STORAGE_KEY);
+                if (saved) {
+                    const parsed = JSON.parse(saved);
+                    Object.assign(this._data, parsed);
+                }
+            } catch (e) {
+                console.warn('[DC Accessibility] Could not load settings:', e);
+            }
+        },
+ 
+        save: function () {
+            try {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(this._data));
+            } catch (e) {
+                console.warn('[DC Accessibility] Could not save settings:', e);
+            }
+        },
+ 
+        get: function (key) { return this._data[key]; },
+ 
+        set: function (key, value) {
+            this._data[key] = value;
+            this.save();
+        },
+    };
+ 
+    DC_Settings.load();
+ 
+    //=========================================================================
+    // NVDA ARIA LIVE REGION
+    // Injects a hidden div that NVDA monitors for text changes.
+    // When text is written here, NVDA reads it aloud in the user's NVDA voice.
+    //=========================================================================
+ 
+    let _ariaLiveRegion = null;
+ 
+    function initAriaLiveRegion() {
+        if (_ariaLiveRegion) return;
+        _ariaLiveRegion = document.createElement('div');
+        _ariaLiveRegion.setAttribute('aria-live', 'assertive');
+        _ariaLiveRegion.setAttribute('aria-atomic', 'true');
+        _ariaLiveRegion.setAttribute('role', 'status');
+        _ariaLiveRegion.id = 'dc-nvda-live';
+        _ariaLiveRegion.style.cssText = [
+            'position:absolute',
+            'left:-9999px',
+            'top:-9999px',
+            'width:1px',
+            'height:1px',
+            'overflow:hidden',
+            'clip:rect(0,0,0,0)',
+            'white-space:nowrap',
+            'border:0',
+        ].join(';');
+        document.body.appendChild(_ariaLiveRegion);
+    }
+ 
+    function announceToNVDA(text) {
+        if (!_ariaLiveRegion) return;
+        // Clear first, then set — NVDA only fires on change
+        _ariaLiveRegion.textContent = '';
+        setTimeout(function () {
+            _ariaLiveRegion.textContent = text;
+        }, 50);
+    }
+ 
+    //=========================================================================
+    // VOICE MANAGER
+    // Handles Web Speech API voices, selection, and speaking.
+    //=========================================================================
+ 
+    const DC_Voice = {
+        _voices: [],
+        _lastSpoken: '',
+        _mapDescriptions: {},
+        _utteranceQueue: [],
+ 
+        init: function () {
+            initAriaLiveRegion();
+            this._loadVoices();
+            if (window.speechSynthesis) {
+                window.speechSynthesis.onvoiceschanged = this._loadVoices.bind(this);
+            }
+        },
+ 
+        _loadVoices: function () {
+            if (!window.speechSynthesis) return;
+            const all = window.speechSynthesis.getVoices();
+            if (all && all.length > 0) {
+                DC_Voice._voices = all;
+            }
+        },
+ 
+        getVoiceNames: function () {
+            return this._voices.map(function (v) { return v.name; });
+        },
+ 
+        getVoiceCount: function () {
+            return this._voices.length;
+        },
+ 
+        getCurrentVoice: function () {
+            const idx = DC_Settings.get('voiceIndex');
+            return this._voices[idx] || (this._voices[0] || null);
+        },
+ 
+        speak: function (text, options) {
+            if (!DC_Settings.get('speechEnabled')) return;
+            if (!text || text.trim() === '') return;
+ 
+            // Strip RPG Maker escape codes (e.g. \c[1], \n[2], \i[3])
+            text = text.replace(/\\[a-zA-Z]\[\d+\]/g, '');
+            text = text.replace(/\\[a-zA-Z]/g, '');
+            text = text.replace(/<[^>]+>/g, ''); // strip HTML tags
+            text = text.trim();
+ 
+            if (!text) return;
+ 
+            this._lastSpoken = text;
+ 
+            const nvdaMode   = DC_Settings.get('nvdaMode');
+            const nvdaDelay  = DC_Settings.get('nvdaDelay');
+ 
+            // Always announce to NVDA live region (NVDA reads in user's own voice)
+            if (nvdaMode) {
+                const delay = options && options.immediate ? 0 : nvdaDelay;
+                setTimeout(function () {
+                    announceToNVDA(text);
+                }, delay);
+            }
+ 
+            // Also speak via Web Speech API (in-game selected voice)
+            if (window.speechSynthesis) {
+                window.speechSynthesis.cancel();
+                const utter       = new SpeechSynthesisUtterance(text);
+                utter.voice       = this.getCurrentVoice();
+                utter.rate        = DC_Settings.get('rate');
+                utter.pitch       = DC_Settings.get('pitch');
+                utter.volume      = DC_Settings.get('volume');
+                utter.lang        = (this.getCurrentVoice() && this.getCurrentVoice().lang) || 'en-US';
+ 
+                const speakNow = function () {
+                    window.speechSynthesis.speak(utter);
+                };
+ 
+                if (nvdaMode && !(options && options.immediate)) {
+                    setTimeout(speakNow, nvdaDelay);
+                } else {
+                    speakNow();
+                }
+            }
+        },
+ 
+        silence: function () {
+            if (window.speechSynthesis) window.speechSynthesis.cancel();
+            announceToNVDA('');
+        },
+ 
+        repeatLast: function () {
+            if (this._lastSpoken) {
+                this.speak(this._lastSpoken, { immediate: true });
+            }
+        },
+ 
+        setMapDescription: function (mapId, desc) {
+            this._mapDescriptions[mapId] = desc;
+        },
+ 
+        lookAround: function () {
+            const mapId = $gameMap ? $gameMap.mapId() : 0;
+            const desc  = this._mapDescriptions[mapId];
+            if (desc) {
+                this.speak(desc);
+            } else {
+                this.speak('No description available for this area.');
+            }
+        },
+    };
+ 
+    //=========================================================================
+    // AUDIO CUE HELPERS
+    //=========================================================================
+ 
+    function playCue(name) {
+        if (!name) return;
+        AudioManager.playSe({ name: name, volume: 90, pitch: 100, pan: 0 });
+    }
+ 
+    //=========================================================================
+    // PLUGIN COMMAND HANDLER
+    //=========================================================================
+ 
+    const _Game_Interpreter_pluginCommand = Game_Interpreter.prototype.pluginCommand;
+    Game_Interpreter.prototype.pluginCommand = function (command, args) {
+        _Game_Interpreter_pluginCommand.call(this, command, args);
+        const text = args.join(' ');
+ 
+        switch (command.toUpperCase()) {
+ 
+            case 'DC_SPEAK':
+                DC_Voice.speak(text);
+                break;
+ 
+            case 'DC_SILENCE':
+                DC_Voice.silence();
+                break;
+ 
+            case 'DC_REPEATLINE':
+                DC_Voice.repeatLast();
+                break;
+ 
+            case 'DC_LOOKAROUND':
+                DC_Voice.lookAround();
+                break;
+ 
+            case 'DC_SETMAPDESC':
+                if ($gameMap) {
+                    DC_Voice.setMapDescription($gameMap.mapId(), text);
+                }
+                break;
+ 
+            case 'DC_BATTLEANNOUNCE':
+                DC_Voice.speak(text, { immediate: true });
+                break;
+ 
+            case 'DC_SPEECH_ON':
+                DC_Settings.set('speechEnabled', true);
+                DC_Voice.speak('Speech narration enabled.');
+                break;
+ 
+            case 'DC_SPEECH_OFF':
+                DC_Voice.speak('Speech narration disabled.');
+                setTimeout(function () {
+                    DC_Settings.set('speechEnabled', false);
+                }, 800);
+                break;
+        }
+    };
+ 
+    //=========================================================================
+    // MESSAGE WINDOW AUTO-NARRATION
+    // Hooks into Window_Message to read all dialogue aloud automatically.
+    //=========================================================================
+ 
+    const _Window_Message_startMessage = Window_Message.prototype.startMessage;
+    Window_Message.prototype.startMessage = function () {
+        _Window_Message_startMessage.call(this);
+        const text = $gameMessage.allText ? $gameMessage.allText() : '';
+        if (text) {
+            DC_Voice.speak(text);
+        }
+    };
+ 
+    // Also narrate the speaker name if present
+    const _Window_NameBox_refresh = Window_NameBox && Window_NameBox.prototype.refresh;
+    if (_Window_NameBox_refresh) {
+        Window_NameBox.prototype.refresh = function () {
+            _Window_NameBox_refresh.call(this);
+            if (this._name && this._name !== '') {
+                // Prepend speaker name to next spoken line context
+                DC_Voice._pendingSpeaker = this._name;
+            }
+        };
+    }
+ 
+    //=========================================================================
+    // MENU CURSOR AUDIO CUES
+    // Plays a sound and speaks the item name whenever the cursor moves.
+    //=========================================================================
+ 
+    const _Window_Selectable_select = Window_Selectable.prototype.select;
+    Window_Selectable.prototype.select = function (index) {
+        const prev = this._index;
+        _Window_Selectable_select.call(this, index);
+        if (index !== prev && index >= 0 && this.active) {
+            playCue(DC_Settings.get('menuCue'));
+            // Try to read the currently selected item
+            const item = this.item ? this.item() : null;
+            if (item) {
+                const name = item.name || '';
+                if (name) DC_Voice.speak(name);
+            } else if (this.commandName) {
+                // For command windows
+                const name = this.commandName(index);
+                if (name) DC_Voice.speak(name);
+            }
+        }
+    };
+ 
+    // Confirm sound
+    const _Window_Selectable_processOk = Window_Selectable.prototype.processOk;
+    Window_Selectable.prototype.processOk = function () {
+        playCue(DC_Settings.get('confirmCue'));
+        _Window_Selectable_processOk.call(this);
+    };
+ 
+    // Cancel sound
+    const _Window_Selectable_processCancel = Window_Selectable.prototype.processCancel;
+    Window_Selectable.prototype.processCancel = function () {
+        playCue(DC_Settings.get('cancelCue'));
+        _Window_Selectable_processCancel.call(this);
+    };
+ 
+    //=========================================================================
+    // BATTLE ANNOUNCER
+    // Narrates battle actions automatically.
+    //=========================================================================
+ 
+    const _BattleManager_invokeAction = BattleManager.invokeAction;
+    BattleManager.invokeAction = function (subject, target) {
+        _BattleManager_invokeAction.call(this, subject, target);
+        if (subject && target && this._action) {
+            const subjectName = subject.name ? subject.name() : 'Unknown';
+            const targetName  = target.name  ? target.name()  : 'Unknown';
+            const actionName  = (this._action.item && this._action.item())
+                                ? this._action.item().name
+                                : 'Attack';
+            const msg = subjectName + ' uses ' + actionName + ' on ' + targetName + '!';
+            setTimeout(function () {
+                DC_Voice.speak(msg, { immediate: true });
+            }, 200);
+        }
+    };
+ 
+    // Narrate damage dealt
+    const _Game_Action_executeDamage = Game_Action.prototype.executeDamage;
+    Game_Action.prototype.executeDamage = function (target, value) {
+        _Game_Action_executeDamage.call(this, target, value);
+        if (value > 0) {
+            playCue(DC_Settings.get('battleHitCue'));
+            const targetName = target.name ? target.name() : 'Target';
+            setTimeout(function () {
+                DC_Voice.speak(targetName + ' takes ' + value + ' damage!', { immediate: true });
+            }, 600);
+ 
+            // Low HP warning
+            if (target.isActor && target.isActor()) {
+                const hpRate = target.hp / target.mhp;
+                if (hpRate <= 0.25 && hpRate > 0) {
+                    playCue(DC_Settings.get('lowHpCue'));
+                    setTimeout(function () {
+                        DC_Voice.speak(target.name() + ' is critically low on HP! Warning!', { immediate: true });
+                    }, 1200);
+                }
+            }
+        }
+    };
+ 
+    // Narrate KO
+    const _Game_BattlerBase_die = Game_BattlerBase.prototype.die;
+    Game_BattlerBase.prototype.die = function () {
+        _Game_BattlerBase_die.call(this);
+        const name = this.name ? this.name() : 'A combatant';
+        setTimeout(function () {
+            DC_Voice.speak(name + ' has been defeated!', { immediate: true });
+        }, 400);
+    };
+ 
+    // Narrate victory
+    const _BattleManager_processVictory = BattleManager.processVictory;
+    BattleManager.processVictory = function () {
+        _BattleManager_processVictory.call(this);
+        playCue(DC_Settings.get('victoryCue'));
+        DC_Voice.speak('Victory! Battle won!');
+    };
+ 
+    // Narrate game over
+    const _BattleManager_processDefeat = BattleManager.processDefeat;
+    BattleManager.processDefeat = function () {
+        _BattleManager_processDefeat.call(this);
+        DC_Voice.speak('Defeat. Your party has fallen. Game over.');
+    };
+ 
+    //=========================================================================
+    // MAP TRANSITION NARRATION
+    //=========================================================================
+ 
+    const _Scene_Map_onMapLoaded = Scene_Map.prototype.onMapLoaded;
+    Scene_Map.prototype.onMapLoaded = function () {
+        _Scene_Map_onMapLoaded.call(this);
+        const mapId   = $gameMap ? $gameMap.mapId() : 0;
+        const mapData = $dataMap;
+        const mapName = mapData && mapData.displayName ? mapData.displayName : ('Map ' + mapId);
+        setTimeout(function () {
+            DC_Voice.speak('Entering ' + mapName + '. Press the Look Around key for a description.');
+        }, 800);
+    };
+ 
+    //=========================================================================
+    // OPTIONS MENU — VOICE SETTINGS
+    // Adds accessibility options to the in-game Options menu.
+    //=========================================================================
+ 
+    // Extend the options window to include accessibility settings
+    const _Window_Options_makeCommandList = Window_Options.prototype.makeCommandList;
+    Window_Options.prototype.makeCommandList = function () {
+        _Window_Options_makeCommandList.call(this);
+        this.addCommand('--- Accessibility ---', 'dc_header',  false);
+        this.addCommand('Speech Narration',      'dc_speech');
+        this.addCommand('NVDA Mode',             'dc_nvda');
+        this.addCommand('Speech Rate',           'dc_rate');
+        this.addCommand('Speech Pitch',          'dc_pitch');
+        this.addCommand('Speech Volume',         'dc_vol');
+        this.addCommand('Voice Select',          'dc_voice');
+        this.addCommand('Repeat Last Line',      'dc_repeat',  true);
+    };
+ 
+    const _Window_Options_statusText = Window_Options.prototype.statusText;
+    Window_Options.prototype.statusText = function (index) {
+        const symbol = this.commandSymbol(index);
+        switch (symbol) {
+            case 'dc_speech': return DC_Settings.get('speechEnabled') ? 'ON'  : 'OFF';
+            case 'dc_nvda':   return DC_Settings.get('nvdaMode')      ? 'ON'  : 'OFF';
+            case 'dc_rate':   return (DC_Settings.get('rate') * 100).toFixed(0)   + '%';
+            case 'dc_pitch':  return DC_Settings.get('pitch').toFixed(1);
+            case 'dc_vol':    return (DC_Settings.get('volume') * 100).toFixed(0) + '%';
+            case 'dc_voice': {
+                const names = DC_Voice.getVoiceNames();
+                const idx   = DC_Settings.get('voiceIndex');
+                return names[idx] ? names[idx].substring(0, 22) : 'Default';
+            }
+            case 'dc_repeat': return '▶';
+            case 'dc_header': return '';
+        }
+        return _Window_Options_statusText.call(this, index);
+    };
+ 
+    const _Window_Options_processOk = Window_Options.prototype.processOk;
+    Window_Options.prototype.processOk = function () {
+        const symbol = this.currentSymbol();
+        if (this._handleDcOption(symbol, 1)) return;
+        _Window_Options_processOk.call(this);
+    };
+ 
+    const _Window_Options_cursorRight = Window_Options.prototype.cursorRight;
+    Window_Options.prototype.cursorRight = function (wrap) {
+        const symbol = this.currentSymbol();
+        if (this._handleDcOption(symbol, 1)) return;
+        _Window_Options_cursorRight.call(this, wrap);
+    };
+ 
+    const _Window_Options_cursorLeft = Window_Options.prototype.cursorLeft;
+    Window_Options.prototype.cursorLeft = function (wrap) {
+        const symbol = this.currentSymbol();
+        if (this._handleDcOption(symbol, -1)) return;
+        _Window_Options_cursorLeft.call(this, wrap);
+    };
+ 
+    Window_Options.prototype._handleDcOption = function (symbol, direction) {
+        switch (symbol) {
+            case 'dc_speech':
+                DC_Settings.set('speechEnabled', !DC_Settings.get('speechEnabled'));
+                DC_Voice.speak(DC_Settings.get('speechEnabled') ? 'Speech on.' : 'Speech off.', { immediate: true });
+                this.redrawCurrentItem();
+                return true;
+ 
+            case 'dc_nvda':
+                DC_Settings.set('nvdaMode', !DC_Settings.get('nvdaMode'));
+                DC_Voice.speak('NVDA mode ' + (DC_Settings.get('nvdaMode') ? 'on.' : 'off.'), { immediate: true });
+                this.redrawCurrentItem();
+                return true;
+ 
+            case 'dc_rate': {
+                let r = DC_Settings.get('rate') + direction * 0.1;
+                r = Math.min(2.0, Math.max(0.5, Math.round(r * 10) / 10));
+                DC_Settings.set('rate', r);
+                DC_Voice.speak('Speech rate ' + (r * 100).toFixed(0) + ' percent.', { immediate: true });
+                this.redrawCurrentItem();
+                return true;
+            }
+ 
+            case 'dc_pitch': {
+                let p = DC_Settings.get('pitch') + direction * 0.1;
+                p = Math.min(2.0, Math.max(0.5, Math.round(p * 10) / 10));
+                DC_Settings.set('pitch', p);
+                DC_Voice.speak('Pitch ' + p.toFixed(1) + '.', { immediate: true });
+                this.redrawCurrentItem();
+                return true;
+            }
+ 
+            case 'dc_vol': {
+                let v = DC_Settings.get('volume') + direction * 0.1;
+                v = Math.min(1.0, Math.max(0.1, Math.round(v * 10) / 10));
+                DC_Settings.set('volume', v);
+                DC_Voice.speak('Speech volume ' + (v * 100).toFixed(0) + ' percent.', { immediate: true });
+                this.redrawCurrentItem();
+                return true;
+            }
+ 
+            case 'dc_voice': {
+                const count = DC_Voice.getVoiceCount();
+                if (count === 0) return true;
+                let idx = DC_Settings.get('voiceIndex') + direction;
+                if (idx < 0) idx = count - 1;
+                if (idx >= count) idx = 0;
+                DC_Settings.set('voiceIndex', idx);
+                const names = DC_Voice.getVoiceNames();
+                DC_Voice.speak('Voice changed to ' + (names[idx] || 'default') + '.', { immediate: true });
+                this.redrawCurrentItem();
+                return true;
+            }
+ 
+            case 'dc_repeat':
+                DC_Voice.repeatLast();
+                return true;
+ 
+            case 'dc_header':
+                return true;
+        }
+        return false;
+    };
+ 
+    //=========================================================================
+    // KEYBOARD SHORTCUT — REPEAT LAST LINE (F5 by default)
+    // Blind players can press F5 at any time to rehear the last spoken line.
+    //=========================================================================
+ 
+    const _Scene_Base_update = Scene_Base.prototype.update;
+    Scene_Base.prototype.update = function () {
+        _Scene_Base_update.call(this);
+        if (Input.isTriggered('dc_repeat')) {
+            DC_Voice.repeatLast();
+        }
+        if (Input.isTriggered('dc_lookaround')) {
+            DC_Voice.lookAround();
+        }
+    };
+ 
+    // Register custom input keys
+    Input.keyMapper[116] = 'dc_repeat';    // F5 = Repeat last line
+    Input.keyMapper[117] = 'dc_lookaround'; // F6 = Look Around
+ 
+    //=========================================================================
+    // GLOBAL API
+    // Expose key functions globally so other plugins can hook in.
+    //=========================================================================
+ 
+    window.DC_Speak        = function (text, options) { DC_Voice.speak(text, options); };
+    window.DC_Silence      = function ()              { DC_Voice.silence(); };
+    window.DC_RepeatLast   = function ()              { DC_Voice.repeatLast(); };
+    window.DC_LookAround   = function ()              { DC_Voice.lookAround(); };
+    window.DC_SetMapDesc   = function (mapId, desc)   { DC_Voice.setMapDescription(mapId, desc); };
+    window.DC_GetVoices    = function ()              { return DC_Voice.getVoiceNames(); };
+    window.DC_SetVoice     = function (index)         { DC_Settings.set('voiceIndex', index); };
+    window.DC_Settings     = DC_Settings;
+ 
+    //=========================================================================
+    // INITIALIZATION
+    //=========================================================================
+ 
+    const _Scene_Boot_start = Scene_Boot.prototype.start;
+    Scene_Boot.prototype.start = function () {
+        _Scene_Boot_start.call(this);
+        DC_Voice.init();
+        console.log('[DC Accessibility] Plugin loaded. NVDA mode: ' + DC_Settings.get('nvdaMode'));
+    };
+ 
+    // Announce title screen
+    const _Scene_Title_start = Scene_Title.prototype.start;
+    Scene_Title.prototype.start = function () {
+        _Scene_Title_start.call(this);
+        setTimeout(function () {
+            DC_Voice.speak(
+                'Dimensions Collide: The Inter-Universal Impact. Title screen. ' +
+                'Press Enter or Z to start. Press F5 at any time to repeat the last spoken line. ' +
+                'Press F6 on any map to hear a description of your surroundings.'
+            );
+        }, 1000);
+    };
+ 
+})();
