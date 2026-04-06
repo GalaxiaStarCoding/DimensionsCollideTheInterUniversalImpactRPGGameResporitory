@@ -1,1 +1,627 @@
+/*:
+ * @plugindesc ATB Battle System - RPG Maker 2003 Style v7.0
+ * @author Claude
+ *
+ * @param ATB Speed
+ * @type number
+ * @default 3
+ */
 
+(function () {
+'use strict';
+
+//=============================================================================
+// PARAMETERS
+//=============================================================================
+var params    = PluginManager.parameters('ATB_BattleSystem_2003Style');
+var ATB_SPEED = Number(params['ATB Speed'] || 3);
+var ATB_MAX   = 1000;
+
+var PANEL_W = 160;
+var PANEL_H = 108;
+var FACE_W  = 72;
+var FACE_H  = 96;
+var PAD     = 4;
+
+//=============================================================================
+// KILL DEFAULT BATTLE LOG
+//=============================================================================
+Window_BattleLog.prototype.push                 = function () {};
+Window_BattleLog.prototype.displayAction        = function () {};
+Window_BattleLog.prototype.displayActionResults = function () {};
+
+//=============================================================================
+// NEUTRALIZE BATTLEMANGER STATE MACHINE
+// Prevents "refresh of undefined" and other default-system interference
+//=============================================================================
+BattleManager.refreshStatus   = function () {};
+BattleManager.startInput      = function () {};
+BattleManager.selectNextActor = function () {};
+BattleManager.updateTurn      = function () {};
+
+//=============================================================================
+// SAFE LOG
+//=============================================================================
+Scene_Battle.prototype.atbLog = function (text) {
+    if (!this._logWindow || !this._logWindow.contents) return;
+    try {
+        this._logWindow.clear();
+        this._logWindow.drawText(text, 0, 0, this._logWindow.contentsWidth(), 'left');
+    } catch (e) {}
+};
+
+//=============================================================================
+// ATB ON BATTLERS
+//=============================================================================
+var _initMembers = Game_Battler.prototype.initMembers;
+Game_Battler.prototype.initMembers = function () {
+    _initMembers.call(this);
+    this._atbValue   = 0;
+    this._atbFull    = false;
+    this._atbWaiting = false;
+};
+
+Game_Battler.prototype.atbRate   = function () { return Math.min((this._atbValue || 0) / ATB_MAX, 1); };
+Game_Battler.prototype.isAtbFull = function () { return !!this._atbFull; };
+Game_Battler.prototype.clearAtb  = function () {
+    this._atbValue = 0; this._atbFull = false; this._atbWaiting = false;
+};
+Game_Battler.prototype.tickAtb = function () {
+    if (this._atbFull || this._atbWaiting || !this.canMove()) return;
+    var agi = Math.max(this.agi || 1, 1);
+    this._atbValue = Math.min(this._atbValue + Math.max(ATB_SPEED * (1 + agi / 100), 1), ATB_MAX);
+    if (this._atbValue >= ATB_MAX) this._atbFull = true;
+};
+
+//=============================================================================
+// BATTLE MANAGER — SAFE ACTION APPLY (no refreshStatus call)
+//=============================================================================
+BattleManager.atbInvokeAction = function (subject, action, target) {
+    if (!subject || !action || !target) return;
+    var item = action.item();
+    if (!item) return;
+    try {
+        // Show animation via Spriteset_Battle — works for both enemies AND actors
+        var animationId = item.animationId;
+        if (animationId && animationId > 0) {
+            var mirror = subject.isActor();
+            var spriteset = SceneManager._scene._spriteset;
+            if (spriteset && spriteset.showNormalAnimation) {
+                spriteset.showNormalAnimation([target], animationId, mirror);
+            }
+        }
+        subject.useItem(item);
+        action.apply(target);
+    } catch (e) {
+        console.warn('ATB action error:', e);
+    }
+};
+
+//=============================================================================
+// WINDOW_ATB_PARTY  — Fight / Auto / Escape
+//=============================================================================
+function Window_ATBParty() { this.initialize.apply(this, arguments); }
+Window_ATBParty.prototype = Object.create(Window_Command.prototype);
+Window_ATBParty.prototype.constructor = Window_ATBParty;
+Window_ATBParty.prototype.initialize = function () {
+    Window_Command.prototype.initialize.call(this, 0, 0);
+    this.y = Graphics.boxHeight - PANEL_H - this.height;
+    this.hide();
+};
+Window_ATBParty.prototype.windowWidth    = function () { return 160; };
+Window_ATBParty.prototype.makeCommandList = function () {
+    this.addCommand('Fight',  'fight');
+    this.addCommand('Auto',   'auto');
+    // FIX 1: Escape is grayed out (disabled) if canEscape() is false
+    this.addCommand('Escape', 'escape', BattleManager.canEscape());
+};
+
+//=============================================================================
+// WINDOW_ATB_ACTOR  — Attack / Skill / Item / Defend
+//=============================================================================
+function Window_ATBActor() { this.initialize.apply(this, arguments); }
+Window_ATBActor.prototype = Object.create(Window_Command.prototype);
+Window_ATBActor.prototype.constructor = Window_ATBActor;
+Window_ATBActor.prototype.initialize = function () {
+    Window_Command.prototype.initialize.call(this, 0, 0);
+    this.hide();
+};
+Window_ATBActor.prototype.windowWidth    = function () { return 160; };
+Window_ATBActor.prototype.makeCommandList = function () {
+    this.addCommand('Attack', 'attack');
+    this.addCommand('Skill',  'skill');
+    this.addCommand('Item',   'item');
+    this.addCommand('Defend', 'guard');
+};
+
+//=============================================================================
+// HUD SPRITE
+//=============================================================================
+function Sprite_ATBHud() { this.initialize.apply(this, arguments); }
+Sprite_ATBHud.prototype = Object.create(Sprite.prototype);
+Sprite_ATBHud.prototype.constructor = Sprite_ATBHud;
+
+Sprite_ATBHud.prototype.initialize = function () {
+    Sprite.prototype.initialize.call(this);
+    var members = $gameParty.members();
+    this._bmp   = new Bitmap(PANEL_W * members.length, PANEL_H);
+    this.bitmap = this._bmp;
+    this.x = 0;
+    this.y = Graphics.boxHeight - PANEL_H;
+    this._faceSprites = [];
+    members.forEach(function (actor, i) {
+        var fs = new Sprite(ImageManager.loadFace(actor.faceName()));
+        fs.visible = false;
+        this._faceSprites.push(fs);
+        this.addChild(fs);
+    }, this);
+};
+
+Sprite_ATBHud.prototype.update = function () {
+    Sprite.prototype.update.call(this);
+    this._redraw();
+};
+
+Sprite_ATBHud.prototype._redraw = function () {
+    var bmp = this._bmp;
+    bmp.clear();
+    $gameParty.members().forEach(function (actor, i) {
+        var px = i * PANEL_W;
+        bmp.fillRect(px, 0, PANEL_W - 1, PANEL_H, 'rgba(0,0,0,0.75)');
+        bmp.fillRect(px, 0, PANEL_W - 1, 1, 'rgba(255,255,255,0.2)');
+        var fs = this._faceSprites[i];
+        if (fs && fs.bitmap && fs.bitmap.isReady()) {
+            var cols = 4;
+            var sw = Math.floor(fs.bitmap.width / cols / 2) * 2;
+            var sh = Math.floor(fs.bitmap.height / 2);
+            var idx = actor.faceIndex();
+            bmp.blt(fs.bitmap, (idx % cols) * sw, Math.floor(idx / cols) * sh,
+                sw, sh, px + PAD, PAD, FACE_W, FACE_H);
+        }
+        var bx = px + FACE_W + PAD * 2;
+        var bw = PANEL_W - FACE_W - PAD * 3;
+        var rowH = 30;
+        var by = PAD + 2;
+        this._drawRow(bmp, bx, by,            bw, 'HP', actor.hp, actor.mhp, '#cc2222', '#ff7777', true);
+        this._drawRow(bmp, bx, by + rowH,     bw, 'WE', actor.mp, actor.mmp, '#1155cc', '#55aaff', true);
+        this._drawRow(bmp, bx, by + rowH * 2, bw, 'TR', -1, -1,             '#1040a0', '#40a8ff', false, actor.atbRate());
+    }, this);
+};
+
+Sprite_ATBHud.prototype._drawRow = function (bmp, x, y, width, label, cur, max, dark, light, showNum, rate) {
+    var barH = 9;
+    var barY = y + 16;
+    var r = (rate !== undefined) ? rate : (max > 0 ? cur / max : 0);
+    bmp.fontSize = 13;
+    bmp.textColor = '#aaddff';
+    bmp.drawText(label, x, y, 22, 16, 'left');
+    if (showNum && cur >= 0) {
+        bmp.textColor = '#ffffff';
+        bmp.drawText(String(cur), x + 22, y, width - 22, 16, 'right');
+    }
+    bmp.fillRect(x, barY, width, barH, '#111111');
+    var fw = Math.max(0, Math.floor(width * Math.min(r, 1)));
+    if (fw > 0) {
+        var half = Math.ceil(barH / 2);
+        bmp.fillRect(x, barY,        fw, half,        light);
+        bmp.fillRect(x, barY + half, fw, barH - half, dark);
+    }
+};
+
+//=============================================================================
+// WINDOW_ATB_SKILL  — lists all usable skills for the current actor
+// Standalone — does NOT require Window_SkillType to be linked
+//=============================================================================
+function Window_ATBSkill() { this.initialize.apply(this, arguments); }
+Window_ATBSkill.prototype = Object.create(Window_Selectable.prototype);
+Window_ATBSkill.prototype.constructor = Window_ATBSkill;
+
+Window_ATBSkill.prototype.initialize = function (x, y, width, height) {
+    Window_Selectable.prototype.initialize.call(this, x, y, width, height);
+    this._actor = null;
+    this._data  = [];
+};
+
+Window_ATBSkill.prototype.setActor = function (actor) {
+    this._actor = actor;
+};
+
+Window_ATBSkill.prototype.maxItems = function () {
+    return this._data ? this._data.length : 0;
+};
+
+Window_ATBSkill.prototype.item = function () {
+    return this._data && this.index() >= 0 ? this._data[this.index()] : null;
+};
+
+Window_ATBSkill.prototype.isCurrentItemEnabled = function () {
+    var skill = this.item();
+    return skill && this._actor ? this._actor.canUse(skill) : false;
+};
+
+Window_ATBSkill.prototype.makeItemList = function () {
+    if (this._actor) {
+        this._data = this._actor.skills().filter(function (skill) {
+            return skill && skill.id > 0;
+        });
+    } else {
+        this._data = [];
+    }
+};
+
+Window_ATBSkill.prototype.refresh = function () {
+    this.makeItemList();
+    this.createContents();
+    this.drawAllItems();
+};
+
+Window_ATBSkill.prototype.drawItem = function (index) {
+    var skill = this._data[index];
+    if (!skill) return;
+    var rect    = this.itemRect(index);
+    var enabled = this._actor ? this._actor.canUse(skill) : false;
+    this.changePaintOpacity(enabled);
+    this.drawItemName(skill, rect.x, rect.y, rect.width);
+    this.changePaintOpacity(true);
+};
+
+Window_ATBSkill.prototype.processOk = function () {
+    if (!this.isCurrentItemEnabled()) {
+        this.playBuzzerSound();
+        return;
+    }
+    Window_Selectable.prototype.processOk.call(this);
+};
+
+Window_ATBSkill.prototype.playBuzzerSound = function () {
+    SoundManager.playBuzzer();
+};
+
+//=============================================================================
+// SCENE BATTLE
+//=============================================================================
+var _SB_initialize = Scene_Battle.prototype.initialize;
+Scene_Battle.prototype.initialize = function () {
+    _SB_initialize.call(this);
+    this._atbPhase    = 'start';
+    this._autoMode    = false;
+    this._readyActor  = null;
+    this._actionQueue = [];
+    this._timer       = 0;
+};
+
+//─────────────────────────────────────────────────────────────────────────────
+// createAllWindows — fully replaced, no default windows
+//─────────────────────────────────────────────────────────────────────────────
+Scene_Battle.prototype.createAllWindows = function () {
+    this.createLogWindow();
+
+    this._partyWin = new Window_ATBParty();
+    this._partyWin.setHandler('fight',  this.onFight.bind(this));
+    this._partyWin.setHandler('auto',   this.onAuto.bind(this));
+    this._partyWin.setHandler('escape', this.onEscape.bind(this));
+    this.addWindow(this._partyWin);
+
+    this._actorWin = new Window_ATBActor();
+    this._actorWin.setHandler('attack', this.onAttack.bind(this));
+    this._actorWin.setHandler('skill',  this.onSkill.bind(this));
+    this._actorWin.setHandler('item',   this.onItem.bind(this));
+    this._actorWin.setHandler('guard',  this.onGuard.bind(this));
+    this.addWindow(this._actorWin);
+
+    // Skill sub-window (custom — no SkillType window needed)
+    this._skillWin = new Window_ATBSkill(0, 0, Graphics.boxWidth, 200);
+    this._skillWin.hide();
+    this._skillWin.setHandler('ok',     this.onSkillOk.bind(this));
+    this._skillWin.setHandler('cancel', this.onSkillCancel.bind(this));
+    this.addWindow(this._skillWin);
+
+    // Item sub-window (shows party items)
+    this._itemWin = new Window_BattleItem(0, 0, Graphics.boxWidth, 200);
+    this._itemWin.hide();
+    this._itemWin.setHandler('ok',     this.onItemOk.bind(this));
+    this._itemWin.setHandler('cancel', this.onItemCancel.bind(this));
+    this.addWindow(this._itemWin);
+
+    // Enemy select window (for targeting)
+    this._enemyWin = new Window_BattleEnemy(0, Graphics.boxHeight - 200);
+    this._enemyWin.hide();
+    this._enemyWin.setHandler('ok',     this.onEnemyOk.bind(this));
+    this._enemyWin.setHandler('cancel', this.onEnemyCancel.bind(this));
+    this.addWindow(this._enemyWin);
+
+    this._atbHud = new Sprite_ATBHud();
+    this.addChild(this._atbHud);
+};
+
+//─────────────────────────────────────────────────────────────────────────────
+// start
+//─────────────────────────────────────────────────────────────────────────────
+var _SB_start = Scene_Battle.prototype.start;
+Scene_Battle.prototype.start = function () {
+    _SB_start.call(this);
+    $gameParty.members().forEach(function (a) { a.clearAtb(); });
+    $gameTroop.members().forEach(function (e) {
+        e.clearAtb();
+        e._atbValue = Math.random() * 400;
+    });
+    this._actorWin.hide();
+    this._skillWin.hide();
+    this._itemWin.hide();
+    this._enemyWin.hide();
+    this._atbPhase = 'start';
+    this._partyWin.refresh();
+    this._partyWin.show();
+    this._partyWin.activate();
+    this._partyWin.select(0);
+};
+
+//─────────────────────────────────────────────────────────────────────────────
+// FIX 1: Escape — only works if canEscape(), otherwise stays on menu
+// FIX 2: Fight — TR fills but does NOT auto-show log/attacks
+// FIX 6: Auto — properly auto-selects actions when TR fills
+//─────────────────────────────────────────────────────────────────────────────
+Scene_Battle.prototype.onFight = function () {
+    this._partyWin.hide();
+    this._autoMode = false;           // manual mode
+    this._atbPhase = 'fighting';      // start filling TR
+};
+
+Scene_Battle.prototype.onAuto = function () {
+    this._partyWin.hide();
+    this._autoMode = true;            // auto mode — no menus, just attacks
+    this._atbPhase = 'fighting';
+};
+
+Scene_Battle.prototype.onEscape = function () {
+    // FIX 1: Only escape if actually allowed
+    if (BattleManager.canEscape()) {
+        BattleManager.processEscape();
+    } else {
+        // Grayed out, just reactivate menu
+        this._partyWin.activate();
+    }
+};
+
+//─────────────────────────────────────────────────────────────────────────────
+// Actor command handlers
+//─────────────────────────────────────────────────────────────────────────────
+Scene_Battle.prototype.onAttack = function () {
+    var a = this._readyActor;
+    // Open enemy select window for targeting
+    this._pendingAction = new Game_Action(a);
+    this._pendingAction.setAttack();
+    this._actorWin.hide();
+    this._enemyWin.refresh();
+    this._enemyWin.show();
+    this._enemyWin.activate();
+    this._enemyWin.select(0);
+};
+
+// FIX 3: Skill — opens the skill window for the current actor
+Scene_Battle.prototype.onSkill = function () {
+    var a = this._readyActor;
+    this._actorWin.hide();
+    this._skillWin.setActor(a);
+    this._skillWin.refresh();
+    this._skillWin.show();
+    this._skillWin.activate();
+    this._skillWin.select(0);
+};
+
+// FIX 4: Item — opens the item window
+Scene_Battle.prototype.onItem = function () {
+    this._actorWin.hide();
+    this._itemWin.refresh();
+    this._itemWin.show();
+    this._itemWin.activate();
+    this._itemWin.select(0);
+};
+
+// FIX 5: Defend — applies guard immediately, no sub-menu needed
+Scene_Battle.prototype.onGuard = function () {
+    var a   = this._readyActor;
+    var act = new Game_Action(a);
+    act.setGuard();
+    this._actorWin.hide();
+    this._readyActor = null;
+    this._atbPhase   = 'fighting';
+    this.queueAction(a, act, a);
+};
+
+//─────────────────────────────────────────────────────────────────────────────
+// Skill window handlers
+//─────────────────────────────────────────────────────────────────────────────
+Scene_Battle.prototype.onSkillOk = function () {
+    var a    = this._readyActor;
+    var skill = this._skillWin.item();
+    if (!skill) { this.onSkillCancel(); return; }
+    var act = new Game_Action(a);
+    act.setSkill(skill.id);
+    this._pendingAction = act;
+    this._skillWin.hide();
+    // Now pick a target
+    if (act.isForOpponent()) {
+        this._enemyWin.refresh();
+        this._enemyWin.show();
+        this._enemyWin.activate();
+        this._enemyWin.select(0);
+    } else {
+        // Targets ally — just use first member for now
+        this._readyActor = null;
+        this._atbPhase   = 'fighting';
+        this.queueAction(a, act, $gameParty.members()[0]);
+    }
+};
+
+Scene_Battle.prototype.onSkillCancel = function () {
+    this._skillWin.hide();
+    this._actorWin.show();
+    this._actorWin.activate();
+};
+
+//─────────────────────────────────────────────────────────────────────────────
+// Item window handlers
+//─────────────────────────────────────────────────────────────────────────────
+Scene_Battle.prototype.onItemOk = function () {
+    var a    = this._readyActor;
+    var item = this._itemWin.item();
+    if (!item) { this.onItemCancel(); return; }
+    var act = new Game_Action(a);
+    act.setItem(item.id);
+    this._pendingAction = act;
+    this._itemWin.hide();
+    if (act.isForOpponent()) {
+        this._enemyWin.refresh();
+        this._enemyWin.show();
+        this._enemyWin.activate();
+        this._enemyWin.select(0);
+    } else {
+        this._readyActor = null;
+        this._atbPhase   = 'fighting';
+        this.queueAction(a, act, $gameParty.members()[0]);
+    }
+};
+
+Scene_Battle.prototype.onItemCancel = function () {
+    this._itemWin.hide();
+    this._actorWin.show();
+    this._actorWin.activate();
+};
+
+//─────────────────────────────────────────────────────────────────────────────
+// Enemy select handlers
+//─────────────────────────────────────────────────────────────────────────────
+Scene_Battle.prototype.onEnemyOk = function () {
+    var a      = this._readyActor;
+    var target = this._enemyWin.enemy();
+    var act    = this._pendingAction;
+    this._enemyWin.hide();
+    this._pendingAction  = null;
+    this._readyActor     = null;
+    this._atbPhase       = 'fighting';
+    this.queueAction(a, act, target);
+};
+
+Scene_Battle.prototype.onEnemyCancel = function () {
+    this._enemyWin.hide();
+    this._actorWin.show();
+    this._actorWin.activate();
+};
+
+//─────────────────────────────────────────────────────────────────────────────
+// update
+//─────────────────────────────────────────────────────────────────────────────
+Scene_Battle.prototype.update = function () {
+    Scene_Base.prototype.update.call(this);
+    this.updateAtbMain();
+};
+
+Scene_Battle.prototype.updateAtbMain = function () {
+    // TR ticks during fighting and executing
+    if (this._atbPhase === 'fighting' || this._atbPhase === 'executing') {
+        $gameParty.members().forEach(function (a) { a.tickAtb(); });
+        $gameTroop.aliveMembers().forEach(function (e) { e.tickAtb(); });
+    }
+
+    if (this._atbPhase === 'fighting') {
+        this.checkActorReady();
+        this.checkEnemyReady();
+    }
+
+    if (this._atbPhase === 'executing') {
+        if (this._timer-- <= 0) this.finishAction();
+    }
+};
+
+//─────────────────────────────────────────────────────────────────────────────
+// FIX 2 & 6: checkActorReady
+// Manual mode → show Attack/Skill/Item/Defend menu (no log spam)
+// Auto mode   → immediately queue an attack (no menu shown)
+//─────────────────────────────────────────────────────────────────────────────
+Scene_Battle.prototype.checkActorReady = function () {
+    if (this._readyActor) return;
+    var members = $gameParty.members();
+    for (var i = 0; i < members.length; i++) {
+        var a = members[i];
+        if (a.isAlive() && a.isAtbFull() && !a._atbWaiting) {
+            a._atbWaiting    = true;
+            this._readyActor = a;
+
+            if (this._autoMode) {
+                // FIX 6: Auto picks attack automatically, skips all menus
+                var act = new Game_Action(a);
+                act.setAttack();
+                var targets = act.makeTargets();
+                var t = targets[Math.floor(Math.random() * targets.length)];
+                this._readyActor = null;
+                this.queueAction(a, act, t);
+            } else {
+                // FIX 2: Manual — show menu, do NOT log or auto-act
+                this._atbPhase = 'actorInput';
+                this._actorWin.refresh();
+                this._actorWin.show();
+                this._actorWin.activate();
+                this._actorWin.select(0);
+            }
+            break;
+        }
+    }
+};
+
+Scene_Battle.prototype.checkEnemyReady = function () {
+    var self = this;
+    $gameTroop.aliveMembers().forEach(function (e) {
+        if (e.isAtbFull() && !e._atbWaiting) {
+            e._atbWaiting = true;
+            e.makeActions();
+            var act = e.currentAction();
+            if (act) {
+                var tgt = act.makeTargets()[0];
+                if (tgt) self.queueAction(e, act, tgt);
+                else     e.clearAtb();
+            } else {
+                e.clearAtb();
+            }
+        }
+    });
+};
+
+//─────────────────────────────────────────────────────────────────────────────
+// Action queue
+//─────────────────────────────────────────────────────────────────────────────
+Scene_Battle.prototype.queueAction = function (subject, action, target) {
+    this._actionQueue.push({ subject: subject, action: action, target: target });
+    if (this._atbPhase !== 'executing') this.runNextAction();
+};
+
+Scene_Battle.prototype.runNextAction = function () {
+    if (this._actionQueue.length === 0) {
+        this._atbPhase = 'fighting';
+        return;
+    }
+    var entry   = this._actionQueue.shift();
+    var subject = entry.subject;
+    var action  = entry.action;
+    var target  = entry.target;
+    var item    = action.item();
+    if (item) this.atbLog(subject.name() + ' uses ' + item.name);
+    BattleManager.atbInvokeAction(subject, action, target);
+    subject.clearAtb();
+    this._timer    = 60;
+    this._atbPhase = 'executing';
+};
+
+Scene_Battle.prototype.finishAction = function () {
+    if ($gameTroop.isAllDead()) { BattleManager.processVictory(); return; }
+    if ($gameParty.isAllDead()) { BattleManager.processDefeat();  return; }
+    if (this._actionQueue.length > 0) {
+        this.runNextAction();
+    } else {
+        this._atbPhase = 'fighting';
+    }
+};
+
+//=============================================================================
+console.log('ATB v7.0 LOADED');
+})();
